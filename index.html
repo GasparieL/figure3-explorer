@@ -23,6 +23,11 @@ input[type=number] { width: 80px; }
 .col-sep { background: linear-gradient(to bottom, transparent, #c8c8d0 20%, #c8c8d0 80%, transparent); width: 2px; justify-self: center; }
 .panel { border: 1px solid #d0d0d5; border-radius: 6px; padding: 4px; background: #fff; }
 .panel.middle { background: #f8f8f8; }
+/* Per-metric row tints — barely-there transparent washes (low-alpha rgba)
+   so the row reads as a hint of color rather than a solid pastel. */
+.metric-row.metric-rt       { background: rgba(255, 213,  79, 0.12); }
+.metric-row.metric-accuracy { background: rgba(149, 195,  85, 0.12); }
+.metric-row.metric-errors   { background: rgba(229, 138, 114, 0.12); }
 .panel h3 { margin: 0 0 2px 2px; font-size: 9px; font-weight: 600; color: #888; text-transform: uppercase; letter-spacing: 0.04em; }
 .plot { height: 280px; }
 #info { font-size: 12px; color: #555; margin-top: 18px; max-width: 1200px; line-height: 1.55; }
@@ -133,11 +138,7 @@ const METRICS = [
   // hideRightFit matches the notebook's grey_out_models config for the
   // errors row — both plot_configs_it and plot_configs_v2 grey out the
   // right-panel polynomial fit (`{2: {'right': True}}`).
-  // showRawScatter draws per-trial dots as a rug: dots at the bottom
-  // edge for y=0 (different-category error) and at the top edge for
-  // y=1 (within-category error). The actual binary value is still shown
-  // in the hover tooltip. yLimits stays tuned for the rolling curve.
-  { key: 'errors',   dataKey: 'errors',   label: 'Within-category errors',       yLabel: 'Within Category Errors (%)',   yLimits: [0.52, 0.69], yTick: 0.04, yAsPercent: true,  hideRightFit: true, showRawScatter: true, orders: { IT: [3, 1], V2: [1, 1], default: [3, 1] } },
+  { key: 'errors',   dataKey: 'errors',   label: 'Within-category errors',       yLabel: 'Within Category Errors (%)',   yLimits: [0.52, 0.69], yTick: 0.04, yAsPercent: true,  hideRightFit: true, orders: { IT: [3, 1], V2: [1, 1], default: [3, 1] } },
 ];
 
 // =============================================================================
@@ -321,12 +322,11 @@ function autoXLimits(modelKey, metricKey) {
   return [lo - pad, hi + pad];
 }
 
-function makeLayout(metric, model, side) {
+function makeLayout(metric, model, side, half) {
   const xLimits = model.xLimits || autoXLimits(model.key, metric.dataKey);
+  // Plot interior stays white. The row container (CSS .metric-row.metric-*)
+  // carries the per-metric tint behind the plots.
   return {
-    // Uniform left margin for every panel so all four side plots have an
-    // identical inner plot-area width. The y-label and y-ticks are only
-    // *drawn* on the leftmost panel, but the space is reserved everywhere.
     margin: { t: 6, r: 8, b: 38, l: 54 },
     showlegend: false,
     hovermode: 'closest',
@@ -349,8 +349,8 @@ function makeLayout(metric, model, side) {
       tickfont: { size: 10 },
       showgrid: false,
     },
-    plot_bgcolor: side === 'middle' ? '#f8f8f8' : 'white',
-    paper_bgcolor: side === 'middle' ? '#f8f8f8' : 'white',
+    plot_bgcolor: 'white',
+    paper_bgcolor: 'white',
     shapes: side === 'middle' ? [{
       type: 'line', x0: 0, x1: 0, y0: 0, y1: 1, yref: 'paper',
       line: { color: '#888', dash: 'dash', width: 2 },
@@ -480,7 +480,7 @@ function build() {
   const rowsRoot = document.getElementById('rows');
   for (const metric of METRICS) {
     const row = document.createElement('div');
-    row.className = 'metric-row';
+    row.className = `metric-row metric-${metric.key}`;
     row.innerHTML = `
       <div class="row-header" id="hdr-${metric.key}">${metric.label}</div>
       <div class="row-grid">
@@ -523,7 +523,7 @@ function rollingLineTrace(roll, color) {
   };
 }
 
-function drawSide(id, metric, model, side, panel, sub) {
+function drawSide(id, metric, model, side, panel, sub, half) {
   const traces = [];
   // Raw-trial scatter at actual y values goes FIRST so it sits behind
   // the band / line / fit. Hover still resolves to it because the
@@ -541,19 +541,19 @@ function drawSide(id, metric, model, side, panel, sub) {
     line: { color: model.color, width: 4 }, hoverinfo: 'skip', showlegend: false,
   });
   if (panel.roll.x.length) traces.push(rollingLineTrace(panel.roll, model.color));
-  Plotly.react(id, traces, makeLayout(metric, model, side),
+  Plotly.react(id, traces, makeLayout(metric, model, side, half),
                { responsive: true, displaylogo: false })
         .then(() => attachHover(id));
 }
 
-function drawMiddle(id, metric, model, cont, sub) {
+function drawMiddle(id, metric, model, cont, sub, half) {
   const traces = [];
   const rawScat = sub ? rawScatterTrace(sub, model.color) : null;
   if (rawScat) traces.push(rawScat);
   const band = ciBand(cont, model.color);
   if (band) traces.push(band);
   if (cont.x.length) traces.push(rollingLineTrace(cont, model.color));
-  const layout = makeLayout(metric, model, 'middle');
+  const layout = makeLayout(metric, model, 'middle', half);
   for (const ax of ['xaxis', 'yaxis']) {
     layout[ax].linecolor = model.color; layout[ax].linewidth = 4; layout[ax].mirror = true;
   }
@@ -613,9 +613,9 @@ function refresh() {
         middle: subsampleAndJitter(xs, ys, tids, ERRORS_SCATTER_N, metric.yLimits, xLimitsForJitter),
       } : { left: null, right: null, middle: null };
 
-      drawSide(`plot-${metric.key}-${half}-left`,  metric, model, 'left',  leftP,  sub.left);
-      drawMiddle(`plot-${metric.key}-${half}-middle`, metric, model, cont, sub.middle);
-      drawSide(`plot-${metric.key}-${half}-right`, metric, model, 'right', rightP, sub.right);
+      drawSide(`plot-${metric.key}-${half}-left`,  metric, model, 'left',  leftP,  sub.left,  half);
+      drawMiddle(`plot-${metric.key}-${half}-middle`, metric, model, cont, sub.middle, half);
+      drawSide(`plot-${metric.key}-${half}-right`, metric, model, 'right', rightP, sub.right, half);
     }
     document.getElementById(`hdr-${metric.key}`).textContent =
       `${metric.label}  ·  n = ${N}`;
